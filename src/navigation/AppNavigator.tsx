@@ -16,22 +16,58 @@ export default function AppNavigator() {
         screenOptions={({ route }) => ({
           headerShown: false,
           tabBarActiveTintColor: '#1E88E5',
+          tabBarInactiveTintColor: '#999',
+          tabBarStyle: {
+            height: 65,
+            paddingBottom: 8,
+          },
           tabBarIcon: ({ color, size }) => {
-            let iconName: any;
+            let iconName: keyof typeof Ionicons.glyphMap;
 
-            if (route.name === 'Home') iconName = 'home';
-            if (route.name === 'AddExpense') iconName = 'add-circle';
-            if (route.name === 'Settings') iconName = 'settings';
-            if (route.name === 'Profile') iconName = 'person';
+            switch (route.name) {
+              case 'Home':
+                iconName = 'home-outline';
+                break;
+              case 'AddExpense':
+                iconName = 'add-circle-outline';
+                break;
+              case 'Settings':
+                iconName = 'settings-outline';
+                break;
+              case 'Profile':
+                iconName = 'person-outline';
+                break;
+              default:
+                iconName = 'ellipse';
+            }
 
             return <Ionicons name={iconName} size={size} color={color} />;
           },
         })}
       >
-        <Tab.Screen name="Home" component={Home} />
-        <Tab.Screen name="AddExpense" component={AddExpense} options={{ title: 'Adicionar' }} />
-        <Tab.Screen name="Settings" component={Settings} options={{ title: 'Configurações' }} />
-        <Tab.Screen name="Profile" component={Profile} options={{ title: 'Usuário' }} />
+        <Tab.Screen
+          name="Home"
+          component={Home}
+          options={{ title: 'Início' }}
+        />
+
+        <Tab.Screen
+          name="AddExpense"
+          component={AddExpense}
+          options={{ title: 'Adicionar' }}
+        />
+
+        <Tab.Screen
+          name="Settings"
+          component={Settings}
+          options={{ title: 'Configurações' }}
+        />
+
+        <Tab.Screen
+          name="Profile"
+          component={Profile}
+          options={{ title: 'Usuário' }}
+        />
       </Tab.Navigator>
     </NavigationContainer>
   );
