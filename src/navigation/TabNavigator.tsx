@@ -11,7 +11,15 @@ import CategoriesScreen from "../screens/CategoriesScreen";
 import ProfileScreen from "../screens/ProfileScreen";
 import type { RootStackParamList } from "./RootNavigator";
 
-const Tab = createBottomTabNavigator();
+type TabParamList = {
+  Home: undefined;
+  Analysis: undefined;
+  Add: undefined;
+  Categories: undefined;
+  Profile: undefined;
+};
+
+const Tab = createBottomTabNavigator<TabParamList>();
 
 function EmptyScreen() {
   return null;
@@ -47,14 +55,18 @@ export default function TabNavigator() {
         },
 
         tabBarIcon: ({ color, focused }) => {
+          // ✅ o "Add" usa botão custom, então não desenha ícone aqui
+          if (route.name === "Add") return null;
+
           let iconName: any = "ellipse";
 
           if (route.name === "Home") iconName = focused ? "home" : "home-outline";
           if (route.name === "Analysis")
             iconName = focused ? "stats-chart" : "stats-chart-outline";
-          if (route.name === "Add") iconName = "add";
-          if (route.name === "Categories") iconName = focused ? "grid" : "grid-outline";
-          if (route.name === "Profile") iconName = focused ? "person" : "person-outline";
+          if (route.name === "Categories")
+            iconName = focused ? "grid" : "grid-outline";
+          if (route.name === "Profile")
+            iconName = focused ? "person" : "person-outline";
 
           return <Ionicons name={iconName} size={20} color={color} />;
         },
@@ -68,17 +80,14 @@ export default function TabNavigator() {
         options={{ tabBarLabel: "Análise" }}
       />
 
-      {/* ✅ Botão central (sem ...props pra não quebrar TS no web) */}
+      {/* ✅ Botão central flutuante */}
       <Tab.Screen
         name="Add"
         component={EmptyScreen}
         options={{
           tabBarLabel: "",
-          tabBarButton: ({ accessibilityLabel, testID, accessibilityState }) => (
+          tabBarButton: () => (
             <TouchableOpacity
-              accessibilityLabel={accessibilityLabel}
-              testID={testID}
-              accessibilityState={accessibilityState}
               activeOpacity={0.9}
               onPress={() => navigation.navigate("AddExpense")}
               style={{
