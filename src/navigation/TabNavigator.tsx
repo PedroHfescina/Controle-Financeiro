@@ -11,7 +11,7 @@ import CategoriesScreen from "../screens/CategoriesScreen";
 import ProfileScreen from "../screens/ProfileScreen";
 import type { RootStackParamList } from "./RootNavigator";
 
-type TabParamList = {
+export type TabParamList = {
   Home: undefined;
   Analysis: undefined;
   Add: undefined;
@@ -26,13 +26,14 @@ function EmptyScreen() {
 }
 
 export default function TabNavigator() {
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   return (
     <Tab.Navigator
+      initialRouteName="Home"
       screenOptions={({ route }) => ({
         headerShown: false,
-
         tabBarActiveTintColor: "#1976ff",
         tabBarInactiveTintColor: "#94a3b8",
         tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
@@ -55,24 +56,35 @@ export default function TabNavigator() {
         },
 
         tabBarIcon: ({ color, focused }) => {
-          // ✅ o "Add" usa botão custom, então não desenha ícone aqui
           if (route.name === "Add") return null;
 
-          let iconName: any = "ellipse";
+          let iconName: keyof typeof Ionicons.glyphMap = "ellipse";
 
-          if (route.name === "Home") iconName = focused ? "home" : "home-outline";
-          if (route.name === "Analysis")
+          if (route.name === "Home") {
+            iconName = focused ? "home" : "home-outline";
+          }
+
+          if (route.name === "Analysis") {
             iconName = focused ? "stats-chart" : "stats-chart-outline";
-          if (route.name === "Categories")
+          }
+
+          if (route.name === "Categories") {
             iconName = focused ? "grid" : "grid-outline";
-          if (route.name === "Profile")
+          }
+
+          if (route.name === "Profile") {
             iconName = focused ? "person" : "person-outline";
+          }
 
           return <Ionicons name={iconName} size={20} color={color} />;
         },
       })}
     >
-      <Tab.Screen name="Home" component={HomeScreen} options={{ tabBarLabel: "Home" }} />
+      <Tab.Screen
+        name="Home"
+        component={HomeScreen}
+        options={{ tabBarLabel: "Home" }}
+      />
 
       <Tab.Screen
         name="Analysis"
@@ -80,7 +92,6 @@ export default function TabNavigator() {
         options={{ tabBarLabel: "Análise" }}
       />
 
-      {/* ✅ Botão central flutuante */}
       <Tab.Screen
         name="Add"
         component={EmptyScreen}

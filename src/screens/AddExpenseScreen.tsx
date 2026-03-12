@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from "react";
 import {
-  SafeAreaView,
   View,
   Text,
   TextInput,
@@ -8,42 +7,76 @@ import {
   ScrollView,
   Platform,
   KeyboardAvoidingView,
+  Alert,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
+import { useFinance, CategoryName } from "../context/FinanceContext";
 
-type CategoryKey =
-  | "Mercado"
-  | "Transporte"
-  | "Lazer"
-  | "Alimentação"
-  | "Casa"
-  | "Combustível"
-  | "Assinaturas"
-  | "Outros";
+type CategoryMeta = {
+  name: CategoryName;
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+};
+
+function parseBRLToNumber(input: string): number {
+  const cleaned = input
+    .replace(/\s/g, "")
+    .replace(/[R$]/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatBRL(value: number) {
+  const safe = Number(value) || 0;
+
+  try {
+    return safe.toLocaleString("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    });
+  } catch {
+    return `R$ ${safe.toFixed(2)}`.replace(".", ",");
+  }
+}
 
 export default function AddExpenseScreen() {
-  const navigation = useNavigation();
+  const navigation = useNavigation<any>();
+  const { addExpense, plan, getCategoryLimit, categoryHasLimit } = useFinance();
 
-  const categories = useMemo(
-    () =>
-      [
-        { name: "Mercado", icon: "cart", color: "#2563eb" },
-        { name: "Transporte", icon: "car", color: "#0ea5e9" },
-        { name: "Lazer", icon: "game-controller", color: "#7c3aed" },
-        { name: "Alimentação", icon: "restaurant", color: "#f97316" },
-        { name: "Casa", icon: "home", color: "#16a34a" },
-        { name: "Combustível", icon: "flame", color: "#ef4444" },
-        { name: "Assinaturas", icon: "card", color: "#64748b" },
-        { name: "Outros", icon: "ellipsis-horizontal", color: "#334155" },
-      ] as const,
+  const allCategories = useMemo<CategoryMeta[]>(
+    () => [
+      { name: "Mercado", icon: "cart", color: "#2563eb" },
+      { name: "Transporte", icon: "car", color: "#0ea5e9" },
+      { name: "Lazer", icon: "game-controller", color: "#7c3aed" },
+      { name: "Alimentação", icon: "restaurant", color: "#f97316" },
+      { name: "Casa", icon: "home", color: "#16a34a" },
+      { name: "Combustível", icon: "flame", color: "#ef4444" },
+      { name: "Assinaturas", icon: "card", color: "#64748b" },
+      { name: "Outros", icon: "ellipsis-horizontal", color: "#334155" },
+    ],
     []
   );
+
+  const categories = useMemo<CategoryMeta[]>(() => {
+    const selected = plan?.selectedCategories ?? [];
+    if (selected.length > 0) {
+      const selectedSet = new Set(selected);
+      return allCategories.filter((item) => selectedSet.has(item.name));
+    }
+    return allCategories;
+  }, [allCategories, plan?.selectedCategories]);
 
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
-  const [category, setCategory] = useState<CategoryKey>("Mercado");
+  const [category, setCategory] = useState<CategoryName>(
+    categories[0]?.name ?? "Mercado"
+  );
+  const [saving, setSaving] = useState(false);
 
   const todayLabel = useMemo(() => {
     const d = new Date();
@@ -53,9 +86,102 @@ export default function AddExpenseScreen() {
     return `${dd}/${mm}/${yyyy}`;
   }, []);
 
-  const selectedCategory = categories.find((c) => c.name === category)!;
+  const selectedCategory =
+    categories.find((item) => item.name === category) ?? allCategories[0];
 
-  const canSave = title.trim().length > 0 && amount.trim().length > 0;
+  const selectedCategoryLimit = getCategoryLimit(category);
+  const selectedCategoryHasLimit = categoryHasLimit(category);
+
+  const canSave =
+    title.trim().length > 0 && amount.trim().length > 0 && !saving;
+
+  const goToCategoriesScreen = () => {
+    try {
+      const parentNavigation = navigation.getParent?.();
+
+      if (parentNavigation?.navigate) {
+        parentNavigation.navigate("Categories");
+        return;
+      }
+    } catch {}
+
+    try {
+      navigation.navigate("Categories");
+      return;
+    } catch {}
+
+    try {
+      navigation.navigate("HomeTabs", { screen: "Categories" });
+      return;
+    } catch {}
+
+    Alert.alert(
+      "Não foi possível abrir Categorias",
+      "Verifique se a rota da aba Categorias está configurada na navegação."
+    );
+  };
+
+  const saveExpenseDirectly = async () => {
+    const valueNumber = parseBRLToNumber(amount);
+
+    if (!valueNumber || valueNumber <= 0) {
+      Alert.alert("Valor inválido", "Digite um valor maior que zero.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      await addExpense({
+        title: title.trim(),
+        category,
+        value: valueNumber,
+        note: note.trim(),
+      });
+
+      navigation.goBack();
+    } catch (error: any) {
+      Alert.alert(
+        "Erro",
+        error?.message ?? "Não foi possível salvar o gasto."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSave = async () => {
+    const valueNumber = parseBRLToNumber(amount);
+
+    if (!valueNumber || valueNumber <= 0) {
+      Alert.alert("Valor inválido", "Digite um valor maior que zero.");
+      return;
+    }
+
+    if (!selectedCategoryHasLimit) {
+      Alert.alert(
+        "Categoria sem orçamento definido",
+        `A categoria ${category} ainda não tem um limite mensal configurado. Você pode definir o orçamento agora ou continuar mesmo assim.`,
+        [
+          {
+            text: "Definir orçamento",
+            onPress: goToCategoriesScreen,
+          },
+          {
+            text: "Continuar mesmo assim",
+            onPress: saveExpenseDirectly,
+          },
+          {
+            text: "Cancelar",
+            style: "cancel",
+          },
+        ]
+      );
+      return;
+    }
+
+    await saveExpenseDirectly();
+  };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#f5f6f8" }}>
@@ -68,7 +194,6 @@ export default function AddExpenseScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Header */}
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             <TouchableOpacity
               onPress={() => navigation.goBack()}
@@ -115,7 +240,6 @@ export default function AddExpenseScreen() {
             </View>
           </View>
 
-          {/* Amount card */}
           <View
             style={{
               marginTop: 14,
@@ -140,7 +264,13 @@ export default function AddExpenseScreen() {
             </Text>
 
             <View style={{ flexDirection: "row", alignItems: "baseline", marginTop: 8 }}>
-              <Text style={{ color: "rgba(255,255,255,0.9)", fontSize: 18, fontWeight: "900" }}>
+              <Text
+                style={{
+                  color: "rgba(255,255,255,0.9)",
+                  fontSize: 18,
+                  fontWeight: "900",
+                }}
+              >
                 R$
               </Text>
 
@@ -177,7 +307,76 @@ export default function AddExpenseScreen() {
             </View>
           </View>
 
-          {/* Form card */}
+          {!selectedCategoryHasLimit && (
+            <View
+              style={{
+                marginTop: 14,
+                backgroundColor: "#fff7ed",
+                borderRadius: 16,
+                padding: 14,
+                borderWidth: 1,
+                borderColor: "#fed7aa",
+                flexDirection: "row",
+                alignItems: "flex-start",
+              }}
+            >
+              <View
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 12,
+                  backgroundColor: "#ffedd5",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginRight: 10,
+                }}
+              >
+                <Ionicons name="warning-outline" size={18} color="#c2410c" />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: "#9a3412", fontWeight: "900", fontSize: 13 }}>
+                  Essa categoria ainda não tem orçamento definido
+                </Text>
+
+                <Text style={{ color: "#9a3412", fontSize: 12, marginTop: 4 }}>
+                  Você pode salvar o gasto mesmo assim, mas a porcentagem da categoria
+                  só fará sentido depois que o limite mensal for definido.
+                </Text>
+
+                <TouchableOpacity
+                  onPress={goToCategoriesScreen}
+                  activeOpacity={0.85}
+                  style={{
+                    marginTop: 10,
+                    alignSelf: "flex-start",
+                    backgroundColor: "#fff",
+                    borderRadius: 10,
+                    paddingHorizontal: 12,
+                    height: 34,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: 1,
+                    borderColor: "#fdba74",
+                    flexDirection: "row",
+                  }}
+                >
+                  <Ionicons name="create-outline" size={14} color="#c2410c" />
+                  <Text
+                    style={{
+                      color: "#c2410c",
+                      fontWeight: "800",
+                      marginLeft: 6,
+                      fontSize: 12,
+                    }}
+                  >
+                    Definir orçamento agora
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
           <View
             style={{
               marginTop: 14,
@@ -194,7 +393,6 @@ export default function AddExpenseScreen() {
               Detalhes
             </Text>
 
-            {/* Title */}
             <Text style={{ marginTop: 12, color: "#64748b", fontSize: 12, fontWeight: "700" }}>
               Descrição
             </Text>
@@ -225,22 +423,27 @@ export default function AddExpenseScreen() {
               />
             </View>
 
-            {/* Categories */}
             <Text style={{ marginTop: 14, color: "#64748b", fontSize: 12, fontWeight: "700" }}>
               Categoria
             </Text>
 
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 10 }}>
-              {categories.map((c) => {
-                const isActive = c.name === category;
-                const bg = isActive ? `${c.color}1A` : "#f1f5f9";
-                const border = isActive ? c.color : "transparent";
+            <View
+              style={{
+                flexDirection: "row",
+                flexWrap: "wrap",
+                marginTop: 10,
+              }}
+            >
+              {categories.map((item, index) => {
+                const isActive = item.name === category;
+                const bg = isActive ? `${item.color}1A` : "#f1f5f9";
+                const border = isActive ? item.color : "transparent";
 
                 return (
                   <TouchableOpacity
-                    key={c.name}
+                    key={item.name}
                     activeOpacity={0.85}
-                    onPress={() => setCategory(c.name as CategoryKey)}
+                    onPress={() => setCategory(item.name)}
                     style={{
                       flexDirection: "row",
                       alignItems: "center",
@@ -250,6 +453,8 @@ export default function AddExpenseScreen() {
                       backgroundColor: bg,
                       borderWidth: 1,
                       borderColor: border,
+                      marginRight: 10,
+                      marginBottom: 10,
                     }}
                   >
                     <View
@@ -259,12 +464,12 @@ export default function AddExpenseScreen() {
                         borderRadius: 10,
                         alignItems: "center",
                         justifyContent: "center",
-                        backgroundColor: isActive ? c.color : "#e2e8f0",
+                        backgroundColor: isActive ? item.color : "#e2e8f0",
                         marginRight: 8,
                       }}
                     >
                       <Ionicons
-                        name={c.icon as any}
+                        name={item.icon}
                         size={14}
                         color={isActive ? "#fff" : "#475569"}
                       />
@@ -272,19 +477,45 @@ export default function AddExpenseScreen() {
 
                     <Text
                       style={{
-                        color: isActive ? c.color : "#334155",
+                        color: isActive ? item.color : "#334155",
                         fontSize: 12,
                         fontWeight: isActive ? "900" : "700",
                       }}
                     >
-                      {c.name}
+                      {item.name}
                     </Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
 
-            {/* Note */}
+            {selectedCategoryHasLimit && (
+              <View
+                style={{
+                  marginTop: 4,
+                  backgroundColor: "#eff6ff",
+                  borderRadius: 14,
+                  padding: 12,
+                  borderWidth: 1,
+                  borderColor: "#dbeafe",
+                }}
+              >
+                <Text style={{ color: "#1d4ed8", fontSize: 12, fontWeight: "800" }}>
+                  Limite mensal da categoria
+                </Text>
+                <Text
+                  style={{
+                    color: "#0f172a",
+                    fontSize: 16,
+                    fontWeight: "900",
+                    marginTop: 4,
+                  }}
+                >
+                  {formatBRL(selectedCategoryLimit)}
+                </Text>
+              </View>
+            )}
+
             <Text style={{ marginTop: 14, color: "#64748b", fontSize: 12, fontWeight: "700" }}>
               Observação (opcional)
             </Text>
@@ -312,7 +543,6 @@ export default function AddExpenseScreen() {
               />
             </View>
 
-            {/* Mini summary */}
             <View
               style={{
                 marginTop: 14,
@@ -335,7 +565,7 @@ export default function AddExpenseScreen() {
                 }}
               >
                 <Ionicons
-                  name={selectedCategory.icon as any}
+                  name={selectedCategory.icon}
                   size={18}
                   color={selectedCategory.color}
                 />
@@ -356,33 +586,28 @@ export default function AddExpenseScreen() {
             </View>
           </View>
 
-          {/* Save button */}
           <TouchableOpacity
-            disabled={!canSave}
+            disabled={!canSave || saving}
             activeOpacity={0.9}
-            onPress={() => {
-              // aqui depois você salva no storage/context
-              navigation.goBack();
-            }}
+            onPress={handleSave}
             style={{
               marginTop: 14,
-              backgroundColor: canSave ? "#1976ff" : "#93c5fd",
+              backgroundColor: canSave && !saving ? "#1976ff" : "#93c5fd",
               height: 56,
               borderRadius: 16,
               alignItems: "center",
               justifyContent: "center",
               shadowColor: "#1976ff",
-              shadowOpacity: canSave ? 0.22 : 0,
+              shadowOpacity: canSave && !saving ? 0.22 : 0,
               shadowRadius: 16,
-              elevation: canSave ? 10 : 0,
+              elevation: canSave && !saving ? 10 : 0,
             }}
           >
             <Text style={{ color: "#fff", fontSize: 15, fontWeight: "900" }}>
-              Salvar gasto
+              {saving ? "Salvando..." : "Salvar gasto"}
             </Text>
           </TouchableOpacity>
 
-          {/* Secondary */}
           <TouchableOpacity
             onPress={() => navigation.goBack()}
             activeOpacity={0.9}

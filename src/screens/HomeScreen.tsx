@@ -1,24 +1,218 @@
-import React from "react";
-import {
-  View,
-  Text,
-  SafeAreaView,
-  ScrollView,
-  TouchableOpacity,
-} from "react-native";
+import React, { useContext, useMemo } from "react";
+import { View, Text, ScrollView, TouchableOpacity } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/RootNavigator";
+import {
+  FinanceContext,
+  CategoryName,
+  CategorySummary,
+} from "../context/FinanceContext";
+
+type ExpenseLike = {
+  id?: string;
+  title?: string;
+  category?: string;
+  value?: number | string;
+  note?: string;
+  createdAt?: any;
+};
+
+function formatBRL(value: number) {
+  const safeValue = Number(value) || 0;
+
+  try {
+    return safeValue.toLocaleString("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    });
+  } catch {
+    return `R$ ${safeValue.toFixed(2)}`.replace(".", ",");
+  }
+}
+
+function getDateFromInput(input: any): Date | null {
+  if (!input) return null;
+
+  if (typeof input === "object" && typeof input.toDate === "function") {
+    const d = input.toDate();
+    return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null;
+  }
+
+  if (input instanceof Date) {
+    return !Number.isNaN(input.getTime()) ? input : null;
+  }
+
+  if (typeof input === "string" || typeof input === "number") {
+    const d = new Date(input);
+    return !Number.isNaN(d.getTime()) ? d : null;
+  }
+
+  return null;
+}
+
+function formatShortDateTime(input: any) {
+  const d = getDateFromInput(input);
+  if (!d) return "Agora";
+
+  const today = new Date();
+
+  const isToday =
+    d.getDate() === today.getDate() &&
+    d.getMonth() === today.getMonth() &&
+    d.getFullYear() === today.getFullYear();
+
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+
+  if (isToday) return `Hoje, ${hh}:${mm}`;
+
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+
+  const isYesterday =
+    d.getDate() === yesterday.getDate() &&
+    d.getMonth() === yesterday.getMonth() &&
+    d.getFullYear() === yesterday.getFullYear();
+
+  if (isYesterday) return `Ontem, ${hh}:${mm}`;
+
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+
+  return `${dd}/${mo}, ${hh}:${mm}`;
+}
+
+function normalizeCategoryName(value?: string): CategoryName {
+  if (!value) return "Outros";
+
+  const normalized = value.trim().toLowerCase();
+
+  const map: Record<string, CategoryName> = {
+    mercado: "Mercado",
+    transporte: "Transporte",
+    lazer: "Lazer",
+    alimentação: "Alimentação",
+    alimentacao: "Alimentação",
+    casa: "Casa",
+    combustível: "Combustível",
+    combustivel: "Combustível",
+    assinaturas: "Assinaturas",
+    outros: "Outros",
+  };
+
+  return map[normalized] ?? "Outros";
+}
+
+function getCategoryMeta(name?: string) {
+  const safeName = normalizeCategoryName(name);
+
+  const map: Record<
+    CategoryName,
+    { icon: keyof typeof Ionicons.glyphMap; accent: string }
+  > = {
+    Mercado: { icon: "cart", accent: "#2563eb" },
+    Transporte: { icon: "car", accent: "#0ea5e9" },
+    Lazer: { icon: "game-controller", accent: "#7c3aed" },
+    Alimentação: { icon: "restaurant", accent: "#f97316" },
+    Casa: { icon: "home", accent: "#16a34a" },
+    Combustível: { icon: "flame", accent: "#ef4444" },
+    Assinaturas: { icon: "card", accent: "#64748b" },
+    Outros: { icon: "ellipsis-horizontal", accent: "#334155" },
+  };
+
+  return map[safeName];
+}
+
+function getCategoryProgressColor(category: CategorySummary) {
+  if (!category.hasLimit) return "#94a3b8";
+  if (category.status === "danger") return "#ef4444";
+  if (category.status === "warning") return "#f59e0b";
+  if (category.status === "safe") return "#16a34a";
+  return getCategoryMeta(category.name).accent;
+}
+
+function getGreeting() {
+  const hour = new Date().getHours();
+
+  if (hour < 12) return "Bom dia";
+  if (hour < 18) return "Boa tarde";
+  return "Boa noite";
+}
 
 export default function HomeScreen() {
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+
+  const context = useContext(FinanceContext);
+
+  const income = Number(context?.income) || 0;
+  const savingsGoal = Number(context?.savingsGoal) || 0;
+  const categories = (context?.categories ?? []) as CategorySummary[];
+  const expenses = (context?.expenses ?? []) as ExpenseLike[];
 
   const goToCategoriesTab = () => {
-    // ✅ como Home está dentro do TabNavigator (que está dentro do Stack),
-    // o TabNavigator é o "parent" navigation.
-    navigation.getParent()?.navigate("Categories" as never);
+    try {
+      (navigation as any).navigate("Categories");
+      return;
+    } catch {}
+
+    try {
+      navigation.navigate("HomeTabs", { screen: "Categories" });
+      return;
+    } catch {}
+
+    try {
+      const parent = navigation.getParent?.();
+      if (parent) {
+        (parent as any).navigate("Categories");
+      }
+    } catch {}
   };
+
+  const goToExpensesHistory = () => {
+    navigation.navigate("ExpensesHistory");
+  };
+
+  const spentTotal = useMemo(() => {
+    return expenses.reduce((acc, expense) => acc + (Number(expense?.value) || 0), 0);
+  }, [expenses]);
+
+  const totalAvailable = useMemo(() => {
+    const value = income - savingsGoal;
+    return value > 0 ? value : 0;
+  }, [income, savingsGoal]);
+
+  const remaining = useMemo(() => {
+    const value = totalAvailable - spentTotal;
+    return value > 0 ? value : 0;
+  }, [totalAvailable, spentTotal]);
+
+  const percentUsed = useMemo(() => {
+    if (totalAvailable <= 0) return 0;
+    const percent = (spentTotal / totalAvailable) * 100;
+    return Math.max(0, Math.min(100, percent));
+  }, [spentTotal, totalAvailable]);
+
+  const topCategories = useMemo(() => {
+    return [...categories]
+      .sort((a, b) => b.spent - a.spent)
+      .slice(0, 3);
+  }, [categories]);
+
+  const recentExpenses = useMemo(() => {
+    return [...expenses]
+      .sort((a, b) => {
+        const aTime = getDateFromInput(a?.createdAt)?.getTime() ?? 0;
+        const bTime = getDateFromInput(b?.createdAt)?.getTime() ?? 0;
+        return bTime - aTime;
+      })
+      .slice(0, 6);
+  }, [expenses]);
+
+  const showBudgetAlert = percentUsed >= 80 && totalAvailable > 0;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#f5f6f8" }}>
@@ -27,14 +221,15 @@ export default function HomeScreen() {
           contentContainerStyle={{ padding: 18, paddingBottom: 150 }}
           showsVerticalScrollIndicator={false}
         >
-          {/* Header */}
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             <View style={{ flex: 1 }}>
-              <Text style={{ color: "#111827", fontSize: 13 }}>Bom dia,</Text>
+              <Text style={{ color: "#111827", fontSize: 13 }}>
+                {getGreeting()},
+              </Text>
               <Text
                 style={{ color: "#111827", fontSize: 22, fontWeight: "800" }}
               >
-                Olá, Pedro
+                Seu painel financeiro
               </Text>
             </View>
 
@@ -71,7 +266,6 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Budget Card */}
           <View
             style={{
               marginTop: 14,
@@ -103,7 +297,7 @@ export default function HomeScreen() {
                 marginTop: 4,
               }}
             >
-              R$ 4.250,00
+              {formatBRL(totalAvailable)}
             </Text>
 
             <View style={{ flexDirection: "row", marginTop: 14 }}>
@@ -124,7 +318,7 @@ export default function HomeScreen() {
                     marginTop: 2,
                   }}
                 >
-                  R$ 1.750,00
+                  {formatBRL(spentTotal)}
                 </Text>
               </View>
 
@@ -145,12 +339,11 @@ export default function HomeScreen() {
                     marginTop: 2,
                   }}
                 >
-                  R$ 2.500,00
+                  {formatBRL(remaining)}
                 </Text>
               </View>
             </View>
 
-            {/* Progress bar */}
             <View style={{ marginTop: 10 }}>
               <View
                 style={{
@@ -162,7 +355,7 @@ export default function HomeScreen() {
               >
                 <View
                   style={{
-                    width: "41%",
+                    width: `${Math.round(percentUsed)}%` as `${number}%`,
                     height: "100%",
                     backgroundColor: "#fff",
                     borderRadius: 8,
@@ -178,57 +371,57 @@ export default function HomeScreen() {
                   textAlign: "center",
                 }}
               >
-                41% do orçamento mensal utilizado
+                {Math.round(percentUsed)}% do orçamento mensal utilizado
               </Text>
             </View>
           </View>
 
-          {/* Alert */}
-          <View
-            style={{
-              marginTop: 14,
-              backgroundColor: "#fff7ed",
-              borderRadius: 14,
-              padding: 14,
-              flexDirection: "row",
-              alignItems: "center",
-            }}
-          >
+          {showBudgetAlert && (
             <View
               style={{
-                width: 36,
-                height: 36,
-                borderRadius: 12,
-                backgroundColor: "#fde68a",
+                marginTop: 14,
+                backgroundColor: "#fff7ed",
+                borderRadius: 14,
+                padding: 14,
+                flexDirection: "row",
                 alignItems: "center",
-                justifyContent: "center",
-                marginRight: 10,
               }}
             >
-              <Ionicons name="warning" size={18} color="#a16207" />
-            </View>
-
-            <View style={{ flex: 1 }}>
-              <Text
-                style={{ color: "#a16207", fontWeight: "800", fontSize: 13 }}
+              <View
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 12,
+                  backgroundColor: "#fde68a",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginRight: 10,
+                }}
               >
-                Alerta de Orçamento
-              </Text>
-              <Text style={{ color: "#92400e", fontSize: 12, marginTop: 2 }}>
-                Seu limite de Lazer está próximo (85%).
-              </Text>
+                <Ionicons name="warning" size={18} color="#a16207" />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text
+                  style={{ color: "#a16207", fontWeight: "800", fontSize: 13 }}
+                >
+                  Alerta de orçamento
+                </Text>
+                <Text style={{ color: "#92400e", fontSize: 12, marginTop: 2 }}>
+                  Você já usou {Math.round(percentUsed)}% do seu orçamento disponível.
+                </Text>
+              </View>
+
+              <TouchableOpacity onPress={goToCategoriesTab}>
+                <Text
+                  style={{ color: "#2563eb", fontSize: 12, fontWeight: "800" }}
+                >
+                  VER
+                </Text>
+              </TouchableOpacity>
             </View>
+          )}
 
-            <TouchableOpacity onPress={goToCategoriesTab}>
-              <Text
-                style={{ color: "#2563eb", fontSize: 12, fontWeight: "800" }}
-              >
-                VER
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Categories */}
           <View
             style={{
               marginTop: 18,
@@ -256,31 +449,76 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
-          <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
-            <CategoryCard
-              title="Mercado"
-              value="R$ 800,00"
-              icon="cart"
-              accent="#2563eb"
-              onPress={goToCategoriesTab}
-            />
-            <CategoryCard
-              title="Lazer"
-              value="R$ 450,00"
-              icon="game-controller"
-              accent="#7c3aed"
-              onPress={goToCategoriesTab}
-            />
-            <CategoryCard
-              title="Casa"
-              value="R$ 300,00"
-              icon="home"
-              accent="#16a34a"
-              onPress={goToCategoriesTab}
-            />
+          <View
+            style={{
+              flexDirection: "row",
+              marginTop: 12,
+            }}
+          >
+            {topCategories.length ? (
+              topCategories.map((category, index) => {
+                const meta = getCategoryMeta(category.name);
+                const progressColor = getCategoryProgressColor(category);
+
+                return (
+                  <View
+                    key={category.id}
+                    style={{
+                      flex: 1,
+                      marginRight: index < topCategories.length - 1 ? 12 : 0,
+                    }}
+                  >
+                    <CategoryCard
+                      title={category.name}
+                      value={formatBRL(category.spent)}
+                      icon={meta.icon}
+                      accent={progressColor}
+                      onPress={goToCategoriesTab}
+                      progress={category.progress}
+                      hasLimit={category.hasLimit}
+                    />
+                  </View>
+                );
+              })
+            ) : (
+              <>
+                <View style={{ flex: 1, marginRight: 12 }}>
+                  <CategoryCard
+                    title="Mercado"
+                    value="R$ 0,00"
+                    icon="cart"
+                    accent="#94a3b8"
+                    onPress={goToCategoriesTab}
+                    progress={0}
+                    hasLimit={false}
+                  />
+                </View>
+                <View style={{ flex: 1, marginRight: 12 }}>
+                  <CategoryCard
+                    title="Lazer"
+                    value="R$ 0,00"
+                    icon="game-controller"
+                    accent="#94a3b8"
+                    onPress={goToCategoriesTab}
+                    progress={0}
+                    hasLimit={false}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <CategoryCard
+                    title="Casa"
+                    value="R$ 0,00"
+                    icon="home"
+                    accent="#94a3b8"
+                    onPress={goToCategoriesTab}
+                    progress={0}
+                    hasLimit={false}
+                  />
+                </View>
+              </>
+            )}
           </View>
 
-          {/* Recent Expenses */}
           <View
             style={{
               marginTop: 18,
@@ -296,43 +534,60 @@ export default function HomeScreen() {
                 flex: 1,
               }}
             >
-              Gastos Recentes
+              Gastos recentes
             </Text>
-            <TouchableOpacity>
+
+            <TouchableOpacity onPress={goToExpensesHistory}>
               <Text
                 style={{ color: "#2563eb", fontWeight: "700", fontSize: 12 }}
               >
-                Filtros
+                Ver todos
               </Text>
             </TouchableOpacity>
           </View>
 
           <View style={{ marginTop: 10 }}>
-            <ExpenseRow
-              title="Starbucks Coffee"
-              subtitle="Hoje, 09:45 • Lazer"
-              value="- R$ 24,50"
-              icon="cafe"
-              negative
-            />
-            <ExpenseRow
-              title="Supermercado Silva"
-              subtitle="Ontem, 18:20 • Mercado"
-              value="- R$ 189,90"
-              icon="bag"
-              negative
-            />
-            <ExpenseRow
-              title="Uber Viagem"
-              subtitle="Ontem, 14:10 • Transporte"
-              value="- R$ 12,50"
-              icon="car"
-              negative
-            />
+            {recentExpenses.length ? (
+              recentExpenses.map((expense, index) => {
+                const expenseCategory = normalizeCategoryName(expense.category);
+                const meta = getCategoryMeta(expenseCategory);
+
+                return (
+                  <ExpenseRow
+                    key={expense.id ?? `${expense.title}-${index}`}
+                    title={expense.title || "Gasto"}
+                    subtitle={`${formatShortDateTime(expense.createdAt)} • ${expenseCategory}`}
+                    value={`- ${formatBRL(Number(expense.value) || 0)}`}
+                    icon={meta.icon}
+                    negative
+                  />
+                );
+              })
+            ) : (
+              <View
+                style={{
+                  backgroundColor: "#fff",
+                  borderRadius: 14,
+                  padding: 14,
+                  shadowColor: "#000",
+                  shadowOpacity: 0.04,
+                  shadowRadius: 10,
+                  elevation: 1,
+                }}
+              >
+                <Text
+                  style={{ color: "#111827", fontWeight: "900", fontSize: 13 }}
+                >
+                  Nenhum gasto ainda
+                </Text>
+                <Text style={{ color: "#6b7280", fontSize: 12, marginTop: 4 }}>
+                  Toque no botão + para adicionar seu primeiro gasto.
+                </Text>
+              </View>
+            )}
           </View>
         </ScrollView>
 
-        {/* Floating + (abre AddExpense) */}
         <TouchableOpacity
           onPress={() => navigation.navigate("AddExpense")}
           activeOpacity={0.9}
@@ -365,19 +620,24 @@ function CategoryCard({
   icon,
   accent,
   onPress,
+  progress = 0,
+  hasLimit = false,
 }: {
   title: string;
   value: string;
-  icon: any;
+  icon: keyof typeof Ionicons.glyphMap;
   accent: string;
   onPress?: () => void;
+  progress?: number;
+  hasLimit?: boolean;
 }) {
+  const safeProgress = Math.max(0, Math.min(100, progress));
+
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.9}
       style={{
-        flex: 1,
         backgroundColor: "#fff",
         borderRadius: 14,
         padding: 12,
@@ -415,12 +675,27 @@ function CategoryCard({
           }}
         >
           <View
-            style={{ width: "55%", height: "100%", backgroundColor: accent }}
+            style={{
+              width: `${safeProgress}%` as `${number}%`,
+              height: "100%",
+              backgroundColor: accent,
+            }}
           />
         </View>
 
         <Text style={{ marginTop: 6, color: "#6b7280", fontSize: 11 }}>
           {value}
+        </Text>
+
+        <Text
+          style={{
+            marginTop: 2,
+            color: hasLimit ? accent : "#94a3b8",
+            fontSize: 10,
+            fontWeight: "700",
+          }}
+        >
+          {hasLimit ? `${Math.round(safeProgress)}% usado` : "Sem limite"}
         </Text>
       </View>
     </TouchableOpacity>
@@ -437,7 +712,7 @@ function ExpenseRow({
   title: string;
   subtitle: string;
   value: string;
-  icon: any;
+  icon: keyof typeof Ionicons.glyphMap;
   negative?: boolean;
 }) {
   return (

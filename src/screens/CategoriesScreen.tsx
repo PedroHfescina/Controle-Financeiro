@@ -1,78 +1,187 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import {
-  SafeAreaView,
   View,
   Text,
   ScrollView,
   TouchableOpacity,
+  TextInput,
+  Alert,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-
-type CategoryItem = {
-  id: string;
-  title: string;
-  subtitle: string;
-  spent: number;
-  limit: number;
-  color: string;
-  icon: any;
-};
+import { useFinance, CategoryName, CategorySummary } from "../context/FinanceContext";
 
 function formatBRL(value: number) {
-  const fixed = value.toFixed(2).replace(".", ",");
-  const parts = fixed.split(",");
-  const int = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  return `R$ ${int},${parts[1]}`;
+  const safe = Number(value) || 0;
+
+  try {
+    return safe.toLocaleString("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    });
+  } catch {
+    const fixed = safe.toFixed(2).replace(".", ",");
+    const parts = fixed.split(",");
+    const int = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    return `R$ ${int},${parts[1]}`;
+  }
+}
+
+function parseBRL(input: string) {
+  const raw = input
+    .replace(/\s/g, "")
+    .replace("R$", "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function getMonthLabel() {
+  return new Date().toLocaleDateString("pt-BR", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function getCategoryMeta(name: CategoryName) {
+  const map: Record<
+    CategoryName,
+    {
+      subtitle: string;
+      icon: keyof typeof Ionicons.glyphMap;
+      baseColor: string;
+    }
+  > = {
+    Mercado: {
+      subtitle: "Compras do mês",
+      icon: "cart",
+      baseColor: "#2563eb",
+    },
+    Transporte: {
+      subtitle: "Apps e deslocamento",
+      icon: "car",
+      baseColor: "#0ea5e9",
+    },
+    Lazer: {
+      subtitle: "Diversão e entretenimento",
+      icon: "game-controller",
+      baseColor: "#7c3aed",
+    },
+    Alimentação: {
+      subtitle: "Restaurantes e delivery",
+      icon: "restaurant",
+      baseColor: "#f97316",
+    },
+    Casa: {
+      subtitle: "Contas e despesas da casa",
+      icon: "home",
+      baseColor: "#16a34a",
+    },
+    Combustível: {
+      subtitle: "Abastecimento do veículo",
+      icon: "flame",
+      baseColor: "#ef4444",
+    },
+    Assinaturas: {
+      subtitle: "Serviços recorrentes",
+      icon: "card",
+      baseColor: "#64748b",
+    },
+    Outros: {
+      subtitle: "Despesas gerais",
+      icon: "ellipsis-horizontal",
+      baseColor: "#334155",
+    },
+  };
+
+  return map[name];
+}
+
+function getStatusColor(status: CategorySummary["status"], baseColor: string) {
+  if (status === "danger") return "#ef4444";
+  if (status === "warning") return "#f59e0b";
+  if (status === "safe") return "#16a34a";
+  return baseColor;
+}
+
+function getStatusLabel(item: CategorySummary) {
+  if (!item.hasLimit) return "SEM LIMITE";
+  if (item.status === "danger") return "CRÍTICO";
+  if (item.status === "warning") return "ATENÇÃO";
+  return "CONTROLADO";
 }
 
 export default function CategoriesScreen() {
-  const monthLabel = "Outubro 2023";
+  const {
+    income,
+    savingsGoal,
+    categories,
+    expenses,
+    updateCategoryLimit,
+  } = useFinance();
 
-  const categories = useMemo<CategoryItem[]>(
-    () => [
-      {
-        id: "food",
-        title: "Alimentação",
-        subtitle: "Restaurantes e delivery",
-        spent: 800,
-        limit: 1200,
-        color: "#1976ff",
-        icon: "fast-food",
-      },
-      {
-        id: "fun",
-        title: "Lazer",
-        subtitle: "Games e Cinema",
-        spent: 280,
-        limit: 300,
-        color: "#f59e0b",
-        icon: "game-controller",
-      },
-      {
-        id: "transport",
-        title: "Transporte",
-        subtitle: "Combustível e Apps",
-        spent: 250,
-        limit: 200,
-        color: "#ef4444",
-        icon: "car",
-      },
-      {
-        id: "market",
-        title: "Mercado",
-        subtitle: "Compras do mês",
-        spent: 1050,
-        limit: 1800,
-        color: "#22c55e",
-        icon: "cart",
-      },
-    ],
-    []
-  );
+  const [editingCategory, setEditingCategory] = useState<CategoryName | null>(null);
+  const [editingValue, setEditingValue] = useState("");
+  const [savingCategory, setSavingCategory] = useState<CategoryName | null>(null);
 
-  const totalAvailable = 2450;
-  const totalSpent = 3550;
-  const goal = 6000;
+  const monthLabel = useMemo(() => getMonthLabel(), []);
+
+  const totalAvailable = Math.max(0, income - savingsGoal);
+
+  const totalSpent = useMemo(() => {
+    return expenses.reduce((acc, item) => acc + (Number(item.value) || 0), 0);
+  }, [expenses]);
+
+  const totalCategoryBudget = useMemo(() => {
+    return categories.reduce((acc, item) => acc + (Number(item.limit) || 0), 0);
+  }, [categories]);
+
+  const totalRemaining = Math.max(0, totalAvailable - totalSpent);
+
+  const averageProgress = useMemo(() => {
+    const withLimit = categories.filter((item) => item.hasLimit);
+    if (!withLimit.length) return 0;
+    return (
+      withLimit.reduce((acc, item) => acc + item.progress, 0) / withLimit.length
+    );
+  }, [categories]);
+
+  const openEdit = (item: CategorySummary) => {
+    setEditingCategory(item.name);
+    setEditingValue(item.limit > 0 ? String(item.limit).replace(".", ",") : "");
+  };
+
+  const cancelEdit = () => {
+    setEditingCategory(null);
+    setEditingValue("");
+  };
+
+  const saveEdit = async (categoryName: CategoryName) => {
+    const parsed = parseBRL(editingValue);
+
+    if (parsed <= 0) {
+      Alert.alert(
+        "Limite inválido",
+        "Informe um valor maior que zero para o limite da categoria."
+      );
+      return;
+    }
+
+    try {
+      setSavingCategory(categoryName);
+      await updateCategoryLimit(categoryName, parsed);
+      cancelEdit();
+    } catch (error) {
+      console.error("Erro ao atualizar limite:", error);
+      Alert.alert(
+        "Erro ao salvar",
+        "Não foi possível atualizar o limite da categoria agora."
+      );
+    } finally {
+      setSavingCategory(null);
+    }
+  };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#f5f6f8" }}>
@@ -81,10 +190,11 @@ export default function CategoriesScreen() {
           contentContainerStyle={{ padding: 18, paddingBottom: 110 }}
           showsVerticalScrollIndicator={false}
         >
-          {/* Header */}
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             <View style={{ flex: 1 }}>
-              <Text style={{ color: "#6b7280", fontSize: 12 }}>{monthLabel}</Text>
+              <Text style={{ color: "#6b7280", fontSize: 12, textTransform: "capitalize" }}>
+                {monthLabel}
+              </Text>
               <Text
                 style={{
                   color: "#111827",
@@ -93,7 +203,7 @@ export default function CategoriesScreen() {
                   marginTop: 2,
                 }}
               >
-                Orçamento Mensal
+                Orçamento por Categoria
               </Text>
             </View>
 
@@ -112,11 +222,10 @@ export default function CategoriesScreen() {
                 elevation: 2,
               }}
             >
-              <Ionicons name="notifications-outline" size={20} color="#111827" />
+              <Ionicons name="options-outline" size={20} color="#111827" />
             </TouchableOpacity>
           </View>
 
-          {/* Blue Summary Card */}
           <View
             style={{
               marginTop: 14,
@@ -138,7 +247,7 @@ export default function CategoriesScreen() {
                     fontWeight: "700",
                   }}
                 >
-                  Total Disponível
+                  Total disponível para gastar
                 </Text>
 
                 <Text
@@ -172,6 +281,7 @@ export default function CategoriesScreen() {
                 marginTop: 14,
                 flexDirection: "row",
                 justifyContent: "space-between",
+                flexWrap: "wrap",
               }}
             >
               <Text
@@ -179,9 +289,10 @@ export default function CategoriesScreen() {
                   color: "rgba(255,255,255,0.92)",
                   fontSize: 12,
                   fontWeight: "700",
+                  marginBottom: 6,
                 }}
               >
-                Gasto Total:{" "}
+                Gasto total:{" "}
                 <Text style={{ fontWeight: "900" }}>{formatBRL(totalSpent)}</Text>
               </Text>
 
@@ -190,14 +301,35 @@ export default function CategoriesScreen() {
                   color: "rgba(255,255,255,0.92)",
                   fontSize: 12,
                   fontWeight: "700",
+                  marginBottom: 6,
                 }}
               >
-                Meta: <Text style={{ fontWeight: "900" }}>{formatBRL(goal)}</Text>
+                Restante:{" "}
+                <Text style={{ fontWeight: "900" }}>{formatBRL(totalRemaining)}</Text>
+              </Text>
+            </View>
+
+            <View
+              style={{
+                marginTop: 8,
+                backgroundColor: "rgba(255,255,255,0.12)",
+                borderRadius: 14,
+                padding: 12,
+              }}
+            >
+              <Text style={{ color: "#fff", fontSize: 12 }}>
+                Meta de economia: <Text style={{ fontWeight: "800" }}>{formatBRL(savingsGoal)}</Text>
+              </Text>
+              <Text style={{ color: "#fff", fontSize: 12, marginTop: 4 }}>
+                Soma dos limites: <Text style={{ fontWeight: "800" }}>{formatBRL(totalCategoryBudget)}</Text>
+              </Text>
+              <Text style={{ color: "#fff", fontSize: 12, marginTop: 4 }}>
+                Média de uso das categorias:{" "}
+                <Text style={{ fontWeight: "800" }}>{Math.round(averageProgress)}%</Text>
               </Text>
             </View>
           </View>
 
-          {/* Categories header row */}
           <View
             style={{
               marginTop: 18,
@@ -216,70 +348,93 @@ export default function CategoriesScreen() {
               Categorias
             </Text>
 
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
-            >
-              <Ionicons name="add-circle-outline" size={16} color="#1976ff" />
-              <Text style={{ color: "#1976ff", fontWeight: "800", fontSize: 12 }}>
-                Adicionar Categoria
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Category cards */}
-          <View style={{ marginTop: 12, gap: 12 }}>
-            {categories.map((c) => (
-              <CategoryBudgetCard key={c.id} item={c} />
-            ))}
-          </View>
-
-          {/* Bottom big button */}
-          <TouchableOpacity
-            activeOpacity={0.9}
-            style={{
-              marginTop: 18,
-              backgroundColor: "#1976ff",
-              height: 56,
-              borderRadius: 18,
-              alignItems: "center",
-              justifyContent: "center",
-              shadowColor: "#1976ff",
-              shadowOpacity: 0.2,
-              shadowRadius: 16,
-              elevation: 10,
-              flexDirection: "row",
-              gap: 10,
-            }}
-          >
-            <Ionicons name="add" size={20} color="#fff" />
-            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 15 }}>
-              Nova Categoria
+            <Text style={{ color: "#64748b", fontWeight: "700", fontSize: 12 }}>
+              Toque em editar para mudar o limite
             </Text>
-          </TouchableOpacity>
+          </View>
+
+          <View style={{ marginTop: 12 }}>
+            {categories.length ? (
+              categories.map((category, index) => (
+                <View
+                  key={category.id}
+                  style={{ marginBottom: index < categories.length - 1 ? 12 : 0 }}
+                >
+                  <CategoryBudgetCard
+                    item={category}
+                    isEditing={editingCategory === category.name}
+                    editingValue={editingValue}
+                    saving={savingCategory === category.name}
+                    onEdit={() => openEdit(category)}
+                    onCancel={cancelEdit}
+                    onChangeValue={setEditingValue}
+                    onSave={() => saveEdit(category.name)}
+                  />
+                </View>
+              ))
+            ) : (
+              <View
+                style={{
+                  backgroundColor: "#fff",
+                  borderRadius: 18,
+                  padding: 16,
+                  shadowColor: "#000",
+                  shadowOpacity: 0.05,
+                  shadowRadius: 12,
+                  elevation: 2,
+                }}
+              >
+                <Text style={{ color: "#111827", fontWeight: "900", fontSize: 14 }}>
+                  Nenhuma categoria configurada
+                </Text>
+                <Text style={{ color: "#6b7280", fontSize: 12, marginTop: 6 }}>
+                  Volte ao setup ou selecione categorias no seu planejamento.
+                </Text>
+              </View>
+            )}
+          </View>
         </ScrollView>
       </View>
     </SafeAreaView>
   );
 }
 
-function CategoryBudgetCard({ item }: { item: CategoryItem }) {
-  const spentPct = item.limit <= 0 ? 0 : item.spent / item.limit;
-  const isExceeded = item.spent > item.limit;
+function CategoryBudgetCard({
+  item,
+  isEditing,
+  editingValue,
+  saving,
+  onEdit,
+  onCancel,
+  onChangeValue,
+  onSave,
+}: {
+  item: CategorySummary;
+  isEditing: boolean;
+  editingValue: string;
+  saving: boolean;
+  onEdit: () => void;
+  onCancel: () => void;
+  onChangeValue: (value: string) => void;
+  onSave: () => void;
+}) {
+  const meta = getCategoryMeta(item.name);
+  const statusColor = getStatusColor(item.status, meta.baseColor);
+  const statusLabel = getStatusLabel(item);
 
-  const remaining = item.limit - item.spent;
-  const remainingAbs = Math.abs(remaining);
+  const remainingLabel = item.hasLimit
+    ? item.spent > item.limit
+      ? "Excedido"
+      : "Restante"
+    : "Limite";
 
-  const statusLabel = isExceeded ? "EXCEDIDO" : "RESTANTE";
-  const statusValue = isExceeded
-    ? formatBRL(remainingAbs)
-    : formatBRL(Math.max(remaining, 0));
+  const remainingValue = item.hasLimit
+    ? item.spent > item.limit
+      ? formatBRL(item.spent - item.limit)
+      : formatBRL(item.remaining)
+    : "Não definido";
 
-  const statusColor = isExceeded ? "#ef4444" : item.color;
-
-  // ✅ barra em flex (sem "55%" string)
-  const fill = Math.max(0, Math.min(1, isExceeded ? 1 : spentPct));
-  const empty = 1 - fill;
+  const safeProgress = Math.max(0, Math.min(100, item.progress));
 
   return (
     <View
@@ -299,21 +454,21 @@ function CategoryBudgetCard({ item }: { item: CategoryItem }) {
             width: 42,
             height: 42,
             borderRadius: 16,
-            backgroundColor: `${item.color}1A`,
+            backgroundColor: `${statusColor}1A`,
             alignItems: "center",
             justifyContent: "center",
             marginRight: 12,
           }}
         >
-          <Ionicons name={item.icon} size={20} color={item.color} />
+          <Ionicons name={meta.icon} size={20} color={statusColor} />
         </View>
 
         <View style={{ flex: 1 }}>
           <Text style={{ color: "#111827", fontWeight: "900", fontSize: 14 }}>
-            {item.title}
+            {item.name}
           </Text>
           <Text style={{ color: "#6b7280", fontSize: 12, marginTop: 2 }}>
-            {item.subtitle}
+            {meta.subtitle}
           </Text>
         </View>
 
@@ -329,7 +484,7 @@ function CategoryBudgetCard({ item }: { item: CategoryItem }) {
               marginTop: 2,
             }}
           >
-            {statusValue}
+            {item.hasLimit ? `${Math.round(safeProgress)}%` : "--"}
           </Text>
         </View>
       </View>
@@ -337,15 +492,20 @@ function CategoryBudgetCard({ item }: { item: CategoryItem }) {
       <View style={{ marginTop: 12 }}>
         <View
           style={{
-            height: 6,
+            height: 7,
             backgroundColor: "#e5e7eb",
             borderRadius: 999,
             overflow: "hidden",
-            flexDirection: "row",
           }}
         >
-          <View style={{ flex: fill, backgroundColor: statusColor }} />
-          <View style={{ flex: empty, backgroundColor: "transparent" }} />
+          <View
+            style={{
+              width: `${safeProgress}%` as `${number}%`,
+              height: "100%",
+              backgroundColor: statusColor,
+              borderRadius: 999,
+            }}
+          />
         </View>
 
         <View
@@ -353,23 +513,137 @@ function CategoryBudgetCard({ item }: { item: CategoryItem }) {
             flexDirection: "row",
             justifyContent: "space-between",
             marginTop: 10,
+            flexWrap: "wrap",
           }}
         >
-          <Text style={{ color: "#6b7280", fontSize: 12 }}>
+          <Text style={{ color: "#6b7280", fontSize: 12, marginBottom: 4 }}>
             Gasto:{" "}
             <Text style={{ color: "#111827", fontWeight: "800" }}>
               {formatBRL(item.spent)}
             </Text>
           </Text>
 
-          <Text style={{ color: "#6b7280", fontSize: 12 }}>
+          <Text style={{ color: "#6b7280", fontSize: 12, marginBottom: 4 }}>
             Limite:{" "}
             <Text style={{ color: "#111827", fontWeight: "800" }}>
-              {formatBRL(item.limit)}
+              {item.hasLimit ? formatBRL(item.limit) : "Não definido"}
+            </Text>
+          </Text>
+        </View>
+
+        <View
+          style={{
+            marginTop: 8,
+            backgroundColor: "#f8fafc",
+            borderRadius: 14,
+            padding: 12,
+          }}
+        >
+          <Text style={{ color: "#64748b", fontSize: 12 }}>
+            {remainingLabel}:{" "}
+            <Text style={{ color: statusColor, fontWeight: "800" }}>
+              {remainingValue}
             </Text>
           </Text>
         </View>
       </View>
+
+      {isEditing ? (
+        <View style={{ marginTop: 14 }}>
+          <Text style={{ color: "#374151", fontSize: 12, marginBottom: 6 }}>
+            Novo limite mensal
+          </Text>
+
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              backgroundColor: "#e5e7eb",
+              borderRadius: 12,
+              paddingHorizontal: 12,
+              height: 48,
+            }}
+          >
+            <Text style={{ marginRight: 8, color: "#6b7280" }}>R$</Text>
+            <TextInput
+              value={editingValue}
+              onChangeText={onChangeValue}
+              keyboardType="numeric"
+              placeholder="0,00"
+              placeholderTextColor="#9ca3af"
+              style={{ flex: 1, fontSize: 15, color: "#111827" }}
+            />
+          </View>
+
+          <View
+            style={{
+              flexDirection: "row",
+              marginTop: 12,
+            }}
+          >
+            <TouchableOpacity
+              onPress={onCancel}
+              activeOpacity={0.85}
+              style={{
+                flex: 1,
+                backgroundColor: "#e5e7eb",
+                borderRadius: 12,
+                height: 44,
+                alignItems: "center",
+                justifyContent: "center",
+                marginRight: 8,
+              }}
+            >
+              <Text style={{ color: "#374151", fontWeight: "700" }}>Cancelar</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={onSave}
+              disabled={saving}
+              activeOpacity={0.85}
+              style={{
+                flex: 1,
+                backgroundColor: "#2563eb",
+                borderRadius: 12,
+                height: 44,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "700" }}>
+                {saving ? "Salvando..." : "Salvar limite"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        <TouchableOpacity
+          onPress={onEdit}
+          activeOpacity={0.85}
+          style={{
+            marginTop: 14,
+            height: 44,
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: "#dbeafe",
+            backgroundColor: "#eff6ff",
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "row",
+          }}
+        >
+          <Ionicons name="create-outline" size={16} color="#2563eb" />
+          <Text
+            style={{
+              color: "#2563eb",
+              fontWeight: "800",
+              marginLeft: 8,
+            }}
+          >
+            {item.hasLimit ? "Editar limite" : "Definir limite"}
+          </Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
