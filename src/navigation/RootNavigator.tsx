@@ -46,23 +46,38 @@ export default function RootNavigator() {
   const { user, loading: authLoading } = useAuth();
   const { loading: financeLoading, plan } = useFinance();
 
-  if (authLoading) {
-    return <AppLoadingScreen />;
-  }
-
   const isAuthenticated = !!user;
   const setupCompleted = !!plan?.setupCompleted;
 
+  let navigationStateKey = "guest";
+
+  if (authLoading) {
+    navigationStateKey = "auth-loading";
+  } else if (!isAuthenticated) {
+    navigationStateKey = "guest";
+  } else if (financeLoading) {
+    navigationStateKey = "finance-loading";
+  } else if (!setupCompleted) {
+    navigationStateKey = "auth-setup";
+  } else {
+    navigationStateKey = "auth-ready";
+  }
+
   return (
     <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {!isAuthenticated ? (
+      <Stack.Navigator
+        key={navigationStateKey}
+        screenOptions={{ headerShown: false }}
+      >
+        {authLoading ? (
+          <Stack.Screen name="Login" component={AppLoadingScreen} />
+        ) : !isAuthenticated ? (
           <>
             <Stack.Screen name="Login" component={LoginScreen} />
             <Stack.Screen name="Register" component={RegisterScreen} />
           </>
         ) : financeLoading ? (
-          <Stack.Screen name="HomeTabs" component={AppLoadingScreen} />
+          <Stack.Screen name="Setup" component={AppLoadingScreen} />
         ) : !setupCompleted ? (
           <>
             <Stack.Screen name="Setup" component={SetupScreen} />
