@@ -44,41 +44,31 @@ function AppLoadingScreen() {
 
 export default function RootNavigator() {
   const { user, loading: authLoading } = useAuth();
-  const { loading: financeLoading, plan } = useFinance();
+  const {
+    loading: financeLoading,
+    isPlanReady,
+    plan,
+  } = useFinance();
 
   const isAuthenticated = !!user;
-  const setupCompleted = !!plan?.setupCompleted;
+  const isFinanceBootstrapping =
+    isAuthenticated && (financeLoading || !isPlanReady);
 
-  let navigationStateKey = "guest";
-
-  if (authLoading) {
-    navigationStateKey = "auth-loading";
-  } else if (!isAuthenticated) {
-    navigationStateKey = "guest";
-  } else if (financeLoading) {
-    navigationStateKey = "finance-loading";
-  } else if (!setupCompleted) {
-    navigationStateKey = "auth-setup";
-  } else {
-    navigationStateKey = "auth-ready";
+  if (authLoading || isFinanceBootstrapping) {
+    return <AppLoadingScreen />;
   }
+
+  const hasCompletedSetup = Boolean(plan?.setupCompleted);
 
   return (
     <NavigationContainer>
-      <Stack.Navigator
-        key={navigationStateKey}
-        screenOptions={{ headerShown: false }}
-      >
-        {authLoading ? (
-          <Stack.Screen name="Login" component={AppLoadingScreen} />
-        ) : !isAuthenticated ? (
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {!isAuthenticated ? (
           <>
             <Stack.Screen name="Login" component={LoginScreen} />
             <Stack.Screen name="Register" component={RegisterScreen} />
           </>
-        ) : financeLoading ? (
-          <Stack.Screen name="Setup" component={AppLoadingScreen} />
-        ) : !setupCompleted ? (
+        ) : !hasCompletedSetup ? (
           <>
             <Stack.Screen name="Setup" component={SetupScreen} />
             <Stack.Screen name="HomeTabs" component={TabNavigator} />

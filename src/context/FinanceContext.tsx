@@ -6,7 +6,6 @@ import React, {
   useState,
   ReactNode,
 } from "react";
-import { onAuthStateChanged, User } from "firebase/auth";
 import {
   addDoc,
   collection,
@@ -21,6 +20,7 @@ import {
   Unsubscribe,
 } from "firebase/firestore";
 import { auth, db } from "../services/firebase";
+import { useAuth } from "./AuthContext";
 
 export type CategoryName =
   | "Mercado"
@@ -73,6 +73,7 @@ interface SavePlanPayload {
 
 interface FinanceContextData {
   loading: boolean;
+  isPlanReady: boolean;
 
   plan: UserPlan;
 
@@ -156,13 +157,31 @@ function normalizeCategoryLimits(value: unknown): CategoryLimits {
     const categoryName = normalizeCategoryName(key);
     const limitValue = Number(rawValue);
 
-    normalized[categoryName] = Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 0;
+    normalized[categoryName] =
+      Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 0;
   }
 
   return normalized;
 }
 
-function getCategoryStatus(progress: number, hasLimit: boolean): CategoryStatus {
+function hasMeaningfulPlanData(
+  income: number,
+  selectedCategories: CategoryName[],
+  categoryLimits: CategoryLimits
+) {
+  const hasIncome = income > 0;
+  const hasCategories = selectedCategories.length > 0;
+  const hasLimits = Object.values(categoryLimits).some(
+    (value) => Number(value) > 0
+  );
+
+  return hasIncome || hasCategories || hasLimits;
+}
+
+function getCategoryStatus(
+  progress: number,
+  hasLimit: boolean
+): CategoryStatus {
   if (!hasLimit) return "neutral";
   if (progress >= 90) return "danger";
   if (progress >= 70) return "warning";
@@ -170,7 +189,10 @@ function getCategoryStatus(progress: number, hasLimit: boolean): CategoryStatus 
 }
 
 export const FinanceProvider = ({ children }: { children: ReactNode }) => {
+  const { user, loading: authLoading } = useAuth();
+
   const [loading, setLoading] = useState(true);
+  const [isPlanReady, setIsPlanReady] = useState(false);
   const [plan, setPlan] = useState<UserPlan>(defaultPlan);
   const [expenses, setExpenses] = useState<Expense[]>([]);
 
@@ -190,39 +212,72 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       }
     };
 
-    const unsubAuth = onAuthStateChanged(auth, (user: User | null) => {
-      cleanupSubs();
+    if (authLoading) {
+      setLoading(true);
+      setIsPlanReady(false);
+      return cleanupSubs;
+    }
 
+    cleanupSubs();
+
+    if (!user) {
       setPlan(defaultPlan);
       setExpenses([]);
-      setLoading(true);
+      setLoading(false);
+      setIsPlanReady(false);
+      return cleanupSubs;
+    }
 
-      if (!user) {
-        setLoading(false);
-        return;
-      }
+    setExpenses([]);
+    setLoading(true);
+    setIsPlanReady(false);
 
-      const userRef = doc(db, "users", user.uid);
+    const userRef = doc(db, "users", user.uid);
 
-      unsubUser = onSnapshot(
-        userRef,
-        (snap) => {
-          if (snap.exists()) {
-            const data = snap.data() as Partial<UserPlan> & {
-              categoryLimits?: unknown;
-            };
+    unsubUser = onSnapshot(
+      userRef,
+      async (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as Partial<UserPlan> & {
+            categoryLimits?: unknown;
+          };
 
-            setPlan({
-              income: Number(data.income ?? 0),
-              savingsGoal: Number(data.savingsGoal ?? 0),
-              selectedCategories: Array.isArray(data.selectedCategories)
-                ? data.selectedCategories.map(normalizeCategoryName)
-                : [],
-              categoryLimits: normalizeCategoryLimits(data.categoryLimits),
-              setupCompleted: Boolean(data.setupCompleted ?? false),
-            });
-          } else {
-            setDoc(
+          const income = Number(data.income ?? 0);
+          const savingsGoal = Number(data.savingsGoal ?? 0);
+          const selectedCategories = Array.isArray(data.selectedCategories)
+            ? data.selectedCategories.map(normalizeCategoryName)
+            : [];
+          const categoryLimits = normalizeCategoryLimits(data.categoryLimits);
+
+          const inferredSetupCompleted =
+            Boolean(data.setupCompleted ?? false) ||
+            hasMeaningfulPlanData(income, selectedCategories, categoryLimits);
+
+          setPlan({
+            income,
+            savingsGoal,
+            selectedCategories,
+            categoryLimits,
+            setupCompleted: inferredSetupCompleted,
+          });
+
+          if (!data.setupCompleted && inferredSetupCompleted) {
+            try {
+              await setDoc(
+                userRef,
+                {
+                  setupCompleted: true,
+                  updatedAt: serverTimestamp(),
+                },
+                { merge: true }
+              );
+            } catch (error) {
+              console.error("Erro ao corrigir setupCompleted:", error);
+            }
+          }
+        } else {
+          try {
+            await setDoc(
               userRef,
               {
                 ...defaultPlan,
@@ -230,53 +285,57 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
                 updatedAt: serverTimestamp(),
               },
               { merge: true }
-            ).catch(() => {});
+            );
+          } catch (error) {
+            console.error("Erro ao criar plano inicial:", error);
           }
 
-          setLoading(false);
-        },
-        (error) => {
-          console.error("Erro ao escutar plano do usuário:", error);
-          setLoading(false);
+          setPlan(defaultPlan);
         }
-      );
 
-      const expCol = collection(db, "users", user.uid, "expenses");
-      const expensesQuery = query(
-        expCol,
-        orderBy("createdAt", "desc"),
-        fsLimit(50)
-      );
+        setIsPlanReady(true);
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Erro ao escutar plano do usuário:", error);
+        setPlan(defaultPlan);
+        setIsPlanReady(true);
+        setLoading(false);
+      }
+    );
 
-      unsubExp = onSnapshot(
-        expensesQuery,
-        (snap) => {
-          const rows: Expense[] = snap.docs.map((expenseDoc) => {
-            const data = expenseDoc.data();
+    const expCol = collection(db, "users", user.uid, "expenses");
+    const expensesQuery = query(
+      expCol,
+      orderBy("createdAt", "desc"),
+      fsLimit(50)
+    );
 
-            return {
-              id: expenseDoc.id,
-              title: String(data.title ?? "Sem descrição"),
-              category: normalizeCategoryName(data.category),
-              value: Number(data.value ?? 0),
-              note: data.note ? String(data.note) : "",
-              createdAt: (data.createdAt as Timestamp) ?? null,
-            };
-          });
+    unsubExp = onSnapshot(
+      expensesQuery,
+      (snap) => {
+        const rows: Expense[] = snap.docs.map((expenseDoc) => {
+          const data = expenseDoc.data();
 
-          setExpenses(rows);
-        },
-        (error) => {
-          console.error("Erro ao escutar despesas:", error);
-        }
-      );
-    });
+          return {
+            id: expenseDoc.id,
+            title: String(data.title ?? "Sem descrição"),
+            category: normalizeCategoryName(data.category),
+            value: Number(data.value ?? 0),
+            note: data.note ? String(data.note) : "",
+            createdAt: (data.createdAt as Timestamp) ?? null,
+          };
+        });
 
-    return () => {
-      cleanupSubs();
-      unsubAuth();
-    };
-  }, []);
+        setExpenses(rows);
+      },
+      (error) => {
+        console.error("Erro ao escutar despesas:", error);
+      }
+    );
+
+    return cleanupSubs;
+  }, [user?.uid, authLoading]);
 
   const setIncomeLocal = (value: number) => {
     setPlan((prev) => ({
@@ -330,13 +389,13 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
     selectedCategories,
     categoryLimits,
   }) => {
-    const user = auth.currentUser;
+    const currentUser = auth.currentUser;
 
-    if (!user) {
+    if (!currentUser) {
       throw new Error("Usuário não autenticado.");
     }
 
-    const userRef = doc(db, "users", user.uid);
+    const userRef = doc(db, "users", currentUser.uid);
     const normalizedCategories = selectedCategories.map(normalizeCategoryName);
 
     const normalizedLimits = normalizedCategories.reduce((acc, categoryName) => {
@@ -366,21 +425,23 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       categoryLimits: normalizedLimits,
       setupCompleted: true,
     }));
+
+    setIsPlanReady(true);
   };
 
   const updateCategoryLimit: FinanceContextData["updateCategoryLimit"] = async (
     name,
     value
   ) => {
-    const user = auth.currentUser;
+    const currentUser = auth.currentUser;
 
-    if (!user) {
+    if (!currentUser) {
       throw new Error("Usuário não autenticado.");
     }
 
     const normalizedName = normalizeCategoryName(name);
     const safeValue = Number(value) > 0 ? Number(value) : 0;
-    const userRef = doc(db, "users", user.uid);
+    const userRef = doc(db, "users", currentUser.uid);
 
     await setDoc(
       userRef,
@@ -405,13 +466,13 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
   const updateCategoryLimits: FinanceContextData["updateCategoryLimits"] = async (
     payload
   ) => {
-    const user = auth.currentUser;
+    const currentUser = auth.currentUser;
 
-    if (!user) {
+    if (!currentUser) {
       throw new Error("Usuário não autenticado.");
     }
 
-    const userRef = doc(db, "users", user.uid);
+    const userRef = doc(db, "users", currentUser.uid);
 
     const normalizedLimits = Object.entries(payload).reduce((acc, [key, value]) => {
       const normalizedName = normalizeCategoryName(key);
@@ -439,13 +500,13 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const addExpense: FinanceContextData["addExpense"] = async (payload) => {
-    const user = auth.currentUser;
+    const currentUser = auth.currentUser;
 
-    if (!user) {
+    if (!currentUser) {
       throw new Error("Usuário não autenticado.");
     }
 
-    const expCol = collection(db, "users", user.uid, "expenses");
+    const expCol = collection(db, "users", currentUser.uid, "expenses");
 
     await addDoc(expCol, {
       title: payload.title?.trim() ? payload.title.trim() : "Sem descrição",
@@ -497,6 +558,7 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
   const value = useMemo<FinanceContextData>(
     () => ({
       loading,
+      isPlanReady,
       plan,
 
       income: plan.income,
@@ -520,7 +582,7 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       getCategoryLimit,
       categoryHasLimit,
     }),
-    [loading, plan, categories, expenses]
+    [loading, isPlanReady, plan, categories, expenses]
   );
 
   return (
